@@ -21,9 +21,9 @@ namespace DeleteEmptyDirs
                 string op = args[argIndex];
                 switch (op) {
                     case "--root": {
-                        if (argIndex + 1 < args.Length) {
-                            root = args[argIndex + 1];
-                            ++argIndex;
+                        ++argIndex;
+                        if (argIndex < args.Length) {
+                            root = args[argIndex];
                         }
                         break;
                     }
@@ -43,6 +43,8 @@ namespace DeleteEmptyDirs
             uint numProcessed = 0;
             uint numToProcess = 0;
             uint numDeleted = 0;
+            uint numFailures = 0;
+            uint numReparsePoints = 0;
             if (rootDir.Exists) {
                 Stack<DirectoryInfo> searchStack = new Stack<DirectoryInfo>();
                 HashSet<string> visitedDirs = new HashSet<string>();
@@ -61,40 +63,53 @@ namespace DeleteEmptyDirs
                                      | FileAttributes.Directory
                                      | FileAttributes.Archive
                                      | FileAttributes.NotContentIndexed);
+
+                    bool reparsePoint = false;
+                    if ((dirAttributes & FileAttributes.ReparsePoint) != 0) {
+                        reparsePoint = true;
+                        ++numReparsePoints;
+                        dirAttributes &= ~FileAttributes.ReparsePoint;
+                    }
                     if (dirAttributes != 0) {
-                        // TODO: Just ignore this and subdirs
                         Console.WriteLine("Directory attributes for '{0}' unknown (TODO: handle) - exiting", dir.FullName);
                         return;
                     }
 
-                    // Get child directories
-                    IEnumerable<DirectoryInfo> subDirs = dir.EnumerateDirectories();
                     bool unfinishedBusiness = false;
-                    foreach (DirectoryInfo subDir in subDirs) {
-                        if (!visitedDirs.Contains(subDir.FullName)) {
-                            ++numToProcess;
-                            searchStack.Push(subDir);
-                            visitedDirs.Add(subDir.FullName);
-                            unfinishedBusiness = true;
+                    int subDirCount = 0;
+                    if (!reparsePoint) {
+                        // Get child directories
+                        IEnumerable<DirectoryInfo> subDirs = dir.EnumerateDirectories();
+                        foreach (DirectoryInfo subDir in subDirs) {
+                            if (!visitedDirs.Contains(subDir.FullName)) {
+                                ++numToProcess;
+                                searchStack.Push(subDir);
+                                visitedDirs.Add(subDir.FullName);
+                                unfinishedBusiness = true;
+                            }
                         }
+                        subDirCount = subDirs.Count();
                     }
 
-                    if (!unfinishedBusiness) {
+                    if (!unfinishedBusiness || reparsePoint) {
                         // Processed all children
                         Console.SetCursorPosition(0, Math.Max(0, Console.CursorTop - 1));
 
-                        if (subDirs.Count() == 0 && dir.EnumerateFiles().Count() == 0) {
+                        if (reparsePoint) {
+                            Console.WriteLine("Skipping reparse point '{0}'", dir.FullName);
+                        } else if (subDirCount == 0 && dir.EnumerateFiles().Count() == 0) {
                             // Delete this dir
-                            Console.Write("Deleting directory '{0}'...", dir.FullName);
+                            Console.Write("Deleting empty directory '{0}'...", dir.FullName);
                             try {
                                 if (!dryRun) {
                                     dir.Delete();
                                 }
                                 Console.WriteLine("OK");
+                                ++numDeleted;
                             } catch (Exception exception) {
                                 Console.WriteLine("FAILED with exception '{0}'", exception.ToString());
+                                ++numFailures;
                             }
-                            ++numDeleted;
                         }
 
                         searchStack.Pop();
@@ -106,7 +121,13 @@ namespace DeleteEmptyDirs
                 Console.WriteLine("Directory '{0}' does not exist", rootDir);
             }
 
-            ++numDeleted;
+            Console.WriteLine("-------------------------");
+            Console.WriteLine("         Summary");
+            Console.WriteLine("-------------------------");
+            Console.WriteLine("Successfully deleted {0} directories", numDeleted);
+            Console.WriteLine("Failed to delete {0} directories", numFailures);
+            Console.WriteLine("Skipped {0} linked directories", numReparsePoints);
+            Console.WriteLine();
         }
     }
 }
